@@ -624,6 +624,22 @@ tbody tr.new-row td{animation:rowflash .9s ease}
       <div id="diag-result" style="font-size:.8rem;margin-top:.7rem;white-space:pre-wrap;line-height:1.6"></div>
     </div>
 
+    <!-- Respaldo completo (backup / restauración) -->
+    <div class="admin-panel">
+      <h3>💾 Respaldo completo</h3>
+      <p style="color:var(--txt2);font-size:.83rem;margin-bottom:1rem;line-height:1.6">
+        Descarga TODO el índice institucional (todos los grados, semestres, análisis y competencias) en un solo archivo — el mismo formato que se guarda en Sheets. Guárdalo en Drive, correo o USB como respaldo.
+      </p>
+      <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+        <button class="btn sm grn" onclick="adminBackupAll()">💾 Descargar respaldo completo</button>
+        <button class="btn sm out" onclick="document.getElementById('restore-file-input').click()">♻️ Restaurar desde respaldo</button>
+      </div>
+      <input type="file" id="restore-file-input" accept="application/json" style="display:none" onchange="adminRestoreAll(this)">
+      <p style="color:var(--txt2);font-size:.74rem;margin-top:.6rem">
+        Restaurar REEMPLAZA todo lo que hay ahora mismo en Sheets — solo úsalo si perdiste datos y necesitas volver a un respaldo anterior.
+      </p>
+    </div>
+
     <!-- Descarga consolidada -->
     <div class="admin-panel">
       <h3>📦 Descarga consolidada institucional</h3>
@@ -2690,6 +2706,56 @@ async function adminImportAndPublish(){
   document.getElementById('admin-xl-publish-btn').style.display='none';
   document.getElementById('admin-xl-msg').textContent='';
   adminLoadSpaces();
+}
+
+// ─── Respaldo completo: descarga el IDX crudo tal cual se guarda en
+//    Sheets (útil para restaurar en caso de pérdida de datos) ──────────
+function adminBackupAll(){
+  const keys=Object.keys(IDX.grados||{});
+  if(!keys.length){toast('No hay datos para respaldar.','warn');return;}
+  const totalEst=keys.reduce((acc,k)=>{
+    const sp=IDX.grados[k];
+    return acc+Object.values(sp.data||{}).flatMap(s=>Object.values(s)).flat().length;
+  },0);
+  const b=new Blob([JSON.stringify(IDX,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);
+  const stamp=new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
+  a.download=`Respaldo_COMPLETO_PruebasSemestrales_${stamp}.json`;a.click();
+  toast(`Respaldo descargado: ${keys.length} grado(s), ${totalEst} estudiante(s). Guárdalo en un lugar seguro.`,'ok',5500);
+}
+
+// Restaura un respaldo previamente descargado con adminBackupAll().
+// Reemplaza TODO el índice actual y lo vuelve a publicar en Sheets/Firebase.
+function adminRestoreAll(input){
+  const file=input.files&&input.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=async ()=>{
+    let parsed;
+    try{ parsed=JSON.parse(reader.result); }
+    catch(e){ toast('Ese archivo no es un JSON válido.','err',5000); input.value=''; return; }
+    if(!parsed||typeof parsed.grados!=='object'){
+      toast('Ese archivo no tiene el formato de un respaldo de esta app.','err',5500);
+      input.value='';return;
+    }
+    const keys=Object.keys(parsed.grados);
+    const totalEst=keys.reduce((acc,k)=>{
+      const sp=parsed.grados[k]||{};
+      return acc+Object.values(sp.data||{}).flatMap(s=>Object.values(s)).flat().length;
+    },0);
+    if(!confirm(`¿Restaurar este respaldo?\n\n${keys.length} grado(s) · ${totalEst} estudiante(s)\n\nEsto REEMPLAZARÁ todos los datos actuales en Sheets, Firebase y en este navegador.\nEsta acción no se puede deshacer.`)){
+      input.value='';return;
+    }
+    IDX={inst:parsed.inst||IDX.inst,grados:parsed.grados};
+    idxAutoSave();
+    syncBadge('syncing','Restaurando...');
+    if(hasFirebaseConfig())await _fbPush();
+    await idxSyncPush(false);
+    toast('Respaldo restaurado y sincronizado.','ok',5000);
+    adminLoadSpaces();
+    input.value='';
+  };
+  reader.readAsText(file);
 }
 
 // ─── Descarga consolidada institucional ─────────────────────────────
