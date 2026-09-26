@@ -365,7 +365,6 @@ tbody tr.new-row td{animation:rowflash .9s ease}
       <select id="login-seccion" style="width:100%">
         <option value="">Sección...</option>
         <option value="PRIMARIA">Primaria</option>
-        <option value="BACHILLERATO">Bachillerato</option>
       </select>
     </div>
     <div class="login-field">
@@ -386,10 +385,12 @@ tbody tr.new-row td{animation:rowflash .9s ease}
       <input type="password" id="new-pwd2" style="width:100%;margin-bottom:.7rem" placeholder="Repetir contraseña">
       <button class="btn sm grn" onclick="saveCreds()" style="width:100%">💾 Guardar credenciales admin</button>
       <div style="margin-top:.9rem;border-top:1px solid var(--bord);padding-top:.8rem">
-        <div class="pwd-panel-title">👩‍🏫 Contraseña de docentes</div>
-        <label class="lbl">Nueva contraseña docentes</label>
-        <input type="password" id="new-teacher-pwd" style="width:100%;margin-bottom:.4rem" placeholder="Contraseña para todos los docentes">
-        <button class="btn sm sky" onclick="saveTeacherPwd()" style="width:100%">💾 Guardar contraseña docentes</button>
+        <div class="pwd-panel-title">👩‍🏫 Contraseña de docentes (por jornada)</div>
+        <label class="lbl">Nueva contraseña docentes — Jornada Mañana</label>
+        <input type="password" id="new-teacher-pwd-manana" style="width:100%;margin-bottom:.55rem" placeholder="Contraseña docentes Mañana">
+        <label class="lbl">Nueva contraseña docentes — Jornada Tarde</label>
+        <input type="password" id="new-teacher-pwd-tarde" style="width:100%;margin-bottom:.4rem" placeholder="Contraseña docentes Tarde">
+        <button class="btn sm sky" onclick="saveTeacherPwd()" style="width:100%">💾 Guardar contraseñas de docentes</button>
       </div>
     </div>
     <div class="login-author">elaborado por Ermoleim Bernal S.</div>
@@ -882,7 +883,7 @@ const GAS_URL_KEY = 'ps_gas_url_v11';
 let GAS_URL = (localStorage.getItem(GAS_URL_KEY) || '').trim() || DEFAULT_GAS_URL;
 
 const AUTH_KEY         = 'ps_auth_v11';
-const TEACHER_AUTH_KEY  = 'ps_teacher_auth_v11';
+const TEACHER_AUTH_KEY  = 'ps_teacher_auth_v11'; // + '_' + jornada
 const THEME_KEY         = 'ps_theme_v11';
 const IDX_KEY           = 'ps_index';          // clave única del índice institucional en Sheets
 const IDX_LOCAL_KEY     = 'ps_index_local';     // copia local de respaldo
@@ -931,13 +932,13 @@ function toast(msg,type='ok',dur=2800){
 //  AUTH — Admin + Docentes
 // ════════════════════════════════════════════════════════════════════
 const ADMIN_DEFAULT   = {user:'admin',pwd:'cervantes2026'};
-const TEACHER_DEFAULT = 'docente2026';
+const TEACHER_DEFAULT = {TARDE:'docente2026',MANANA:'Cerva2026'};
 
 function getAdminCreds(){
   try{return JSON.parse(localStorage.getItem(AUTH_KEY))||ADMIN_DEFAULT;}catch{return ADMIN_DEFAULT;}
 }
-function getTeacherPwd(){
-  try{return localStorage.getItem(TEACHER_AUTH_KEY)||TEACHER_DEFAULT;}catch{return TEACHER_DEFAULT;}
+function getTeacherPwd(jornada){
+  try{return localStorage.getItem(TEACHER_AUTH_KEY+'_'+jornada)||TEACHER_DEFAULT[jornada];}catch{return TEACHER_DEFAULT[jornada];}
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1037,14 +1038,14 @@ function doLogin(){
     }
   }else{
     if(!u||u.length<3){err.textContent='⚠ Ingresa tu nombre completo.';return;}
-    if(p!==getTeacherPwd()){
+    const jornada=document.getElementById('login-jornada').value;
+    const seccion=document.getElementById('login-seccion').value;
+    if(!jornada||!seccion){err.textContent='⚠ Selecciona tu jornada y tu sección.';return;}
+    if(p!==getTeacherPwd(jornada)){
       err.textContent='⚠ Contraseña de docente incorrecta.';
       document.getElementById('login-pwd').value='';document.getElementById('login-pwd').focus();
       return;
     }
-    const jornada=document.getElementById('login-jornada').value;
-    const seccion=document.getElementById('login-seccion').value;
-    if(!jornada||!seccion){err.textContent='⚠ Selecciona tu jornada y tu sección.';return;}
     DOC_JORNADA=jornada;DOC_SECCION=seccion;
     CURRENT_ROLE='docente';CURRENT_USER=u.toUpperCase();_afterLogin();
   }
@@ -1083,7 +1084,8 @@ function showPwdPanel(){
     const c=getAdminCreds();
     document.getElementById('new-user').value=c.user;
     document.getElementById('new-pwd').value='';document.getElementById('new-pwd2').value='';
-    document.getElementById('new-teacher-pwd').value='';
+    document.getElementById('new-teacher-pwd-manana').value='';
+    document.getElementById('new-teacher-pwd-tarde').value='';
     document.getElementById('s-login').classList.remove('hidden');
   }
 }
@@ -1100,10 +1102,14 @@ function saveCreds(){
   toast('Credenciales de administrador actualizadas.','ok');
 }
 function saveTeacherPwd(){
-  const p=document.getElementById('new-teacher-pwd').value;
-  if(p.length<4){toast('Contraseña mínimo 4 caracteres.','warn');return;}
-  localStorage.setItem(TEACHER_AUTH_KEY,p);
-  toast('Contraseña de docentes actualizada. Comunícala al equipo.','ok',4000);
+  const pM=document.getElementById('new-teacher-pwd-manana').value;
+  const pT=document.getElementById('new-teacher-pwd-tarde').value;
+  if(!pM&&!pT){toast('Escribe al menos una contraseña para actualizar.','warn');return;}
+  if(pM&&pM.length<4){toast('Contraseña de Mañana: mínimo 4 caracteres.','warn');return;}
+  if(pT&&pT.length<4){toast('Contraseña de Tarde: mínimo 4 caracteres.','warn');return;}
+  if(pM)localStorage.setItem(TEACHER_AUTH_KEY+'_MANANA',pM);
+  if(pT)localStorage.setItem(TEACHER_AUTH_KEY+'_TARDE',pT);
+  toast('Contraseña(s) de docentes actualizada(s). Comunícalas al equipo.','ok',4000);
 }
 function logout(){
   if(!confirm('¿Cerrar sesión?'))return;
