@@ -841,7 +841,7 @@ tbody tr.new-row td{animation:rowflash .9s ease}
       </div>
       <div class="etop">
         <h2 id="entry-hd">Curso</h2>
-        <button class="btn sm out" onclick="sortAlpha()">🔤 A→Z</button>
+        <button class="btn sm out" id="btn-sort-apellido" onclick="sortAlpha()" title="Ordena por apellido todos los cursos y semestres">🔤 Ordenar por apellido</button>
         <button class="btn sm out" id="btn-paste-list" onclick="document.getElementById('m-paste').classList.add('on')">📋 Pegar lista</button>
         <button class="btn sm" id="btn-add-student" onclick="addBlankRow()">＋ Estudiante</button>
         <button class="btn sm red" id="btn-del-course" onclick="delCourse()">🗑 Curso</button>
@@ -1673,6 +1673,7 @@ function buildEntryUI(){
   document.getElementById('btn-export-json').style.display  = isAdmin?'':'none';
   document.getElementById('btn-sync-sheets').style.display  = isAdmin?'':'none';
   document.getElementById('btn-paste-list').style.display   = isAdmin?'':'none';
+  document.getElementById('btn-sort-apellido').style.display = isAdmin?'':'none';
   document.getElementById('btn-add-student').style.display  = isAdmin?'':'none';
   document.getElementById('row-add-student').style.display  = isAdmin?'':'none';
   document.getElementById('doc-inst-banner').style.display  = isAdmin?'none':'flex';
@@ -2163,7 +2164,7 @@ function moveToC(sem,c,i){
   }
 
   autoSave();buildCourseList();buildTable();
-  toast(`${nombre} movido a Curso ${destino}.`+(movedOther?` (también en ${SEM_LABEL[otroSem]})`:''),'ok',4000);
+  toast(`${nombre} movido a Curso ${destino}.`+(movedOther?` (también en ${SEM_LABEL[otroSem]})`:'')+' Pulsa "🔤 Ordenar por apellido" para reorganizar.','ok',5500);
 }
 function addBlankRow(){
   if(CURRENT_ROLE!=='admin'){toast('Solo el administrador agrega estudiantes.','warn');return;}
@@ -2200,10 +2201,18 @@ function processPaste(){
   closeModals();autoSave();buildTable();
   toast(`${add} agregado${add!==1?'s':''}${skip?` · ${skip} duplicado${skip!==1?'s':''} omitido${skip!==1?'s':''}`:''}.`,'ok',3500);
 }
+// Ordena por apellido (los nombres se guardan como "APELLIDOS NOMBRES")
+// TODOS los cursos de todos los semestres del espacio, así también queda
+// ordenado el curso al que se movió o agregó un estudiante.
 function sortAlpha(){
   if(!ST.activeCourse){toast('Selecciona un curso.','warn');return;}
-  ST.data[ST.activeSem][ST.activeCourse].sort((a,b)=>normName(a.nombre).localeCompare(normName(b.nombre),'es'));
-  autoSave();renderTbody();toast('Ordenado A→Z.','ok');
+  const cmp=(a,b)=>normName(a.nombre).localeCompare(normName(b.nombre),'es',{sensitivity:'base'});
+  let n=0;
+  (ST.sems||[]).forEach(s=>{
+    Object.values(ST.data[s]||{}).forEach(arr=>{if(Array.isArray(arr)&&arr.length>1){arr.sort(cmp);n++;}});
+  });
+  autoSave();renderTbody();buildCourseList();
+  toast(`Ordenado por apellido (${n} curso${n!==1?'s':''}).`,'ok');
 }
 
 // FILL ROW
