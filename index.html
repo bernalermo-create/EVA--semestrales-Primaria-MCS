@@ -1237,7 +1237,15 @@ function idxEnsureSpace(grado,year,sems,jornada,seccion){
 const JORNADA_LABEL={MANANA:'Mañana',TARDE:'Tarde'};
 const SECCION_LABEL={PRIMARIA:'Primaria',BACHILLERATO:'Bachillerato'};
 
-function idxAutoSave(){
+// Control de cambios por revisión (reemplaza al "hash" basado en el largo
+// del JSON, que no detectaba cambios de igual longitud como mover un
+// estudiante de curso). _dirtyKeys = espacios modificados; _dirtyAll =
+// no se sabe cuál, se sube todo.
+let _rev=0,_pushedRev=0,_sheetsPushedRev=0,_dirtyAll=false;
+const _dirtyKeys=new Set();
+function idxAutoSave(key){
+  _rev++;
+  if(key)_dirtyKeys.add(key);else _dirtyAll=true;
   _idxDirty=true;
   clearTimeout(_idxSaveTimer);
   _idxSaveTimer=setTimeout(()=>{
@@ -1318,7 +1326,8 @@ async function idxSyncPush(silent=false){
   if(!_syncEnabled)return;
   if(!hasGasUrl()){syncBadge('off','Sin configurar');return;}
   const h=idxHash();
-  if(h===_lastIdxHash)return;
+  const revAtSend=_rev;
+  if(revAtSend===_sheetsPushedRev)return;
   if(!silent)syncBadge('syncing','Guardando...');
   console.log('[Sync] POST', GAS_URL, 'bytes=', JSON.stringify(IDX).length);
   try{
@@ -1335,7 +1344,7 @@ async function idxSyncPush(silent=false){
     try{ d=JSON.parse(rawTxt); }
     catch(parseErr){ throw new Error('Respuesta no-JSON del servidor: '+rawTxt.slice(0,120)); }
     if(!d.ok)throw new Error(d.error||'Error del servidor');
-    _syncErrors=0;_lastIdxHash=h;
+    _syncErrors=0;_lastIdxHash=h;_sheetsPushedRev=revAtSend;
     const t=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
     syncBadge('ok','Sheets ✓ '+t);
   }catch(e){
@@ -1348,7 +1357,7 @@ async function idxSyncPush(silent=false){
   }
 }
 function startSyncLoop(){clearInterval(_syncTimer);_syncTimer=setInterval(()=>idxSyncPush(true),90000);}
-function _hasUnsentChanges(){return idxHash()!==_lastIdxHash;}
+function _hasUnsentChanges(){return _rev!==_pushedRev;}
 
 // ════════════════════════════════════════════════════════════════════
 //  FIREBASE — sincronización EN TIEMPO REAL
@@ -1469,10 +1478,12 @@ function _safeToRefresh(){
 // perder en qué grado/semestre/curso estaba el docente/admin.
 function _refreshCurrentScreen(){
   const onId=id=>document.getElementById(id)?.classList.contains('on');
-  if(CURRENT_ROLE==='docente'&&ST&&ST.grado){
-    const k=Object.keys(IDX.grados).find(kk=>{
+  if(ST&&ST.grado){
+    // Clave completa (con jornada/sección) para no cargar otro espacio
+    const k0=idxSpaceKey(ST.grado,ST.year,ST.jornada,ST.seccion);
+    const k=IDX.grados[k0]?k0:Object.keys(IDX.grados).find(kk=>{
       const sp=IDX.grados[kk];
-      return sp.grado===ST.grado&&sp.year===ST.year;
+      return sp.grado===ST.grado&&sp.year===ST.year&&(sp.jornada||'')===(ST.jornada||'')&&(sp.seccion||'')===(ST.seccion||'');
     });
     const sp=k&&IDX.grados[k];
     if(sp){
@@ -1493,8 +1504,36 @@ function _refreshCurrentScreen(){
 
 // Aplica datos que llegaron de Firebase (en vivo o al conectar) a la
 // pantalla, conservando en qué grado/semestre/curso estabas.
+// Firebase no guarda arreglos/objetos vacíos: al leer se reconstruyen
+// (cursos sin estudiantes, semestres sin cursos, analysis/competencias).
+function _normalizeSpace(sp){
+  if(!sp)return sp;
+  if(!sp.sems||!sp.sems.length)sp.sems=['S1','S2'];
+  sp.data=sp.data||{};
+  sp.analysis=sp.analysis||{};
+  sp.competencias=sp.competencias||{};
+  ['CMP','FINAL'].forEach(k=>{if(!sp.analysis[k])sp.analysis[k]={};});
+  sp.sems.forEach(s=>{
+    sp.data[s]=sp.data[s]||{};
+    sp.analysis[s]=sp.analysis[s]||{};
+    ((sp.cursos&&sp.cursos[s])||[]).forEach(c=>{if(!Array.isArray(sp.data[s][c]))sp.data[s][c]=Object.values(sp.data[s][c]||{});});
+    Object.keys(sp.data[s]).forEach(c=>{if(!Array.isArray(sp.data[s][c]))sp.data[s][c]=Object.values(sp.data[s][c]||{});});
+  });
+  return sp;
+}
+// Copia lista para subir: guarda la lista de cursos aparte para que los
+// cursos vacíos sobrevivan al viaje por Firebase.
+function _spaceForFirebase(sp){
+  const out=JSON.parse(JSON.stringify(sp));
+  out.cursos={};
+  (out.sems||[]).forEach(s=>{out.cursos[s]=Object.keys((sp.data&&sp.data[s])||{});});
+  return out;
+}
+let _fbKnownKeys=[];
 function _fbApplyRemote(remote){
   if(!remote||!remote.grados)return;
+  Object.keys(remote.grados).forEach(k=>_normalizeSpace(remote.grados[k]));
+  _fbKnownKeys=Object.keys(remote.grados);
   IDX=remote;
   _lastIdxHash=idxHash();
   _refreshCurrentScreen();
@@ -1543,12 +1582,28 @@ function startFirebaseSync(){
 // instante. Se llama automáticamente tras cada edición.
 async function _fbPush(){
   if(!_fbInit()){syncBadge('off','Firebase sin configurar');return;}
-  const h=idxHash();
-  if(h===_lastIdxHash)return;
+  if(_rev===_pushedRev)return;
+  const revAtSend=_rev;
   syncBadge('syncing','Guardando...');
   try{
-    await _fbDb.ref('ps_index').set(IDX);
-    _lastIdxHash=h;
+    // Solo se suben los espacios modificados (no todo el colegio), para
+    // que dos docentes editando grados distintos no se pisen.
+    const keys=_dirtyAll?Object.keys(IDX.grados||{}).concat(_fbKnownKeys):Array.from(_dirtyKeys);
+    const upd={'inst':IDX.inst||''};
+    new Set(keys).forEach(k=>{
+      upd['grados/'+k]=IDX.grados[k]?_spaceForFirebase(IDX.grados[k]):null;
+    });
+    const sentKeys=Array.from(_dirtyKeys);
+    const wasAll=_dirtyAll;
+    _dirtyKeys.clear();_dirtyAll=false;
+    try{
+      await _fbDb.ref('ps_index').update(upd);
+    }catch(err){
+      sentKeys.forEach(k=>_dirtyKeys.add(k));if(wasAll)_dirtyAll=true;
+      throw err;
+    }
+    _pushedRev=revAtSend;
+    if(_rev!==revAtSend)setTimeout(_fbPush,300);
     const t=new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
     syncBadge('ok','Firebase ✓ '+t);
   }catch(e){
@@ -1689,7 +1744,7 @@ function _pushSTtoIDX(){
   sp.data=ST.data;
   sp.analysis=ST.analysis;
   sp.competencias=ST.competencias;
-  idxAutoSave();
+  idxAutoSave(idxSpaceKey(ST.grado,ST.year,ST.jornada,ST.seccion));
 }
 
 // autoSave ahora actualiza tanto ST como IDX
