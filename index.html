@@ -1326,6 +1326,7 @@ async function idxSyncLoad(){
 async function idxSyncPush(silent=false){
   if(!_syncEnabled)return;
   if(!hasGasUrl()){syncBadge('off','Sin configurar');return;}
+  if(hasFirebaseConfig()&&(!_fbHasData||!_fbApplied))return; // Firebase sin datos confiables: no pisar con copia atrasada
   const h=idxHash();
   const revAtSend=_rev;
   if(revAtSend===_sheetsPushedRev)return;
@@ -1395,6 +1396,22 @@ let FIREBASE_CONFIG=(function(){
 function hasFirebaseConfig(){return !!(FIREBASE_CONFIG&&FIREBASE_CONFIG.databaseURL);}
 
 let _fbDb=null,_fbListenerAttached=false,_fbPendingRemote=null;
+// _fbHasData: Firebase ya entregó (aunque vacío) su primer valor sin error.
+// _fbApplied: lo que hay en pantalla ya viene de Firebase (o Firebase está vacío).
+// Mientras alguna sea false NO se envía nada a Firebase ni a Sheets: lo que se
+// ve puede ser una copia atrasada (respaldo de Sheets) y enviarla pisaría los
+// datos buenos.
+let _fbHasData=false,_fbApplied=false;
+function _fbAlert(msg){
+  let b=document.getElementById('fb-alert');
+  if(!b){
+    b=document.createElement('div');b.id='fb-alert';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:.7rem 1rem;font:600 .85rem system-ui,sans-serif;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,.5)';
+    document.body.appendChild(b);
+  }
+  b.textContent='⛔ FIREBASE NO RESPONDE — lo que ves puede ser una copia ATRASADA y NO se guardará nada. No edites. '+(msg?'('+msg+') ':'')+'Avisa al administrador.';
+}
+function _fbAlertHide(){document.getElementById('fb-alert')?.remove();}
 
 function _fbInit(){
   if(!hasFirebaseConfig())return false;
@@ -1556,6 +1573,7 @@ function _spaceForFirebase(sp){
 let _fbKnownKeys=[];
 function _fbApplyRemote(remote){
   if(!remote||!remote.grados)return;
+  _fbApplied=true;
   Object.keys(remote.grados).forEach(k=>_normalizeSpace(remote.grados[k]));
   _fbKnownKeys=Object.keys(remote.grados);
   IDX=remote;
@@ -1577,9 +1595,13 @@ async function startFirebaseSync(){
   catch(e){
     _fbListenerAttached=false;
     console.error('[Firebase] auth anónima falló:', e);
+    _fbAlert('sin sesión anónima');
     syncBadge('err','Firebase: sin sesión');
+    setTimeout(()=>{ if(!_fbListenerAttached)startFirebaseSync(); },15000);
     return;
   }
+
+  setInterval(()=>{ if(_fbPendingRemote&&_safeToRefresh()){ _fbApplyRemote(_fbPendingRemote); _fbPendingRemote=null; } },2000);
 
   _fbDb.ref('.info/connected').on('value',snap=>{
     if(snap.val()===true){
@@ -1591,8 +1613,9 @@ async function startFirebaseSync(){
   });
 
   _fbDb.ref('ps_index').on('value',snap=>{
+    _fbHasData=true;_fbAlertHide();
     const remote=snap.val();
-    if(!remote||!remote.grados)return;
+    if(!remote||!remote.grados){_fbApplied=true;return;}
     if(_safeToRefresh()){
       _fbApplyRemote(remote);
     }else{
@@ -1604,7 +1627,11 @@ async function startFirebaseSync(){
     }
   },err=>{
     console.error('[Firebase] error de escucha:', err);
+    _fbHasData=false;_fbListenerAttached=false;
+    _fbAlert(err.message);
     syncBadge('err','Firebase: '+err.message);
+    // El error cancela la escucha: se reintenta sola hasta que vuelva.
+    setTimeout(()=>{ if(!_fbListenerAttached)startFirebaseSync(); },15000);
   });
 }
 
@@ -1613,6 +1640,7 @@ async function startFirebaseSync(){
 // instante. Se llama automáticamente tras cada edición.
 async function _fbPush(){
   if(!_fbInit()){syncBadge('off','Firebase sin configurar');return;}
+  if(!_fbHasData||!_fbApplied){if(!_fbHasData)_fbAlert('sin conexión con la base');return;}
   if(_rev===_pushedRev)return;
   const revAtSend=_rev;
   syncBadge('syncing','Guardando...');
